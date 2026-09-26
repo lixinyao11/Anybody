@@ -1437,10 +1437,21 @@ class G1ObjectTrackingEnvCfg(G1OneStageTrackingEnvCfg):
     ``scripts/augment_npz_with_object.py``. Motions without them still load (the loader fills
     an identity pose) and are masked out of the object reward by ``motion_has_object``.
 
-    To warm-start from a body-only GMT checkpoint, widen it first with
-    ``scripts/expand_checkpoint_obs.py --new_policy_dims 14 --new_critic_dims 14`` -- the 14
-    appended observations below are exactly the two 7-D object poses, and zeroing their input
-    columns leaves the policy bit-identical to the body-only teacher at step 0.
+    To warm-start from a body-only GMT checkpoint, widen it first with::
+
+        scripts/expand_checkpoint_obs.py --new_policy_dims 70 --new_critic_dims 14
+
+    The two observations added below are 7-D each, but the POLICY group has
+    ``history_length = 5`` while the critic group has none, so the policy input grows by
+    2*7*5 = 70 and the critic's by 2*7 = 14 (verified against the env: actor 815 -> 885,
+    critic 289 -> 303). Getting this wrong does not fail loudly -- it silently shifts every
+    existing observation column -- so take the numbers from the env's printed
+    ``Actor MLP`` / ``Critic MLP`` shapes rather than counting term dims by hand.
+
+    Appending the columns at the END of the vector is correct because
+    ObservationManager._prepare_terms iterates ``group_cfg.__dict__.items()`` (insertion
+    order) and flattens each term's history individually before concatenating term-by-term,
+    so terms assigned here in __post_init__ land last.
     """
 
     def __post_init__(self):
