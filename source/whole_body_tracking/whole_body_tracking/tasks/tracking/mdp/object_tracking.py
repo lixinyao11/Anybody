@@ -31,12 +31,11 @@ Frames
 ------
 ``MultiMotionLoader.object_pos_w`` is in the *motion's* world frame, exactly like
 ``root_pos_w``. ``MultiMotionCommand._resample_command`` places the robot at
-``root_pos_w + scene.env_origins`` (plus optional randomisation), so the box is placed with
-the *same* net translation -- otherwise multi-env offsets or reset randomisation would pull
-the robot and the box apart. With the shipped config (``pose_range = {}``,
-``reset_base_xy_to_origin = False``) that delta is exactly ``env_origins``, but the delta is
-computed rather than assumed so enabling randomisation later does not silently break the
-robot/box relationship.
+``root_pos_w + scene.env_origins`` and then perturbs it in place (``pose_range`` is non-empty
+in the shipped cfg: +-0.05 m in x/y and +-0.2 rad of yaw). The box is placed at
+``object_pos_w + env_origins`` with no perturbation, so that randomisation becomes
+randomisation of the robot's pose *relative to* the box -- which is what it is for. See
+``_resample_command`` for why copying the delta would be wrong.
 
 Still to wire up (not in this module): the env cfg that attaches the box to the scene and
 registers the observation/reward terms, and the gym task id.
@@ -138,21 +137,26 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         if env_ids_t.numel() == 0:
             return
 
-        # The base class places the robot at ``root_pos_w + env_origins`` (see
-        # MultiMotionCommand._resample_command), so the box gets the same offset and the
-        # recorded robot/box geometry is preserved. Two config knobs would break that
-        # assumption, and both are off in the shipped cfg -- fail loudly rather than
-        # silently placing the box somewhere the robot is not:
-        #   * ``pose_range``: adds an unstored random delta to the robot root only. Reading
-        #     the robot pose back from the sim to recover it is not reliable here because
-        #     Isaac Lab 2.x distinguishes root *link* and root *com* frames.
-        #   * ``reset_base_xy_to_origin``: discards the motion's XY entirely.
-        if self.cfg.pose_range:
-            raise NotImplementedError(
-                "ObjectMultiMotionCommand does not support commands.motion.pose_range yet: the "
-                "random root delta is not observable from here, so the box would be offset "
-                f"from the robot. Got pose_range={self.cfg.pose_range!r}."
-            )
+        # The box is placed at its ABSOLUTE reference pose (plus the env origin), and
+        # deliberately does *not* receive the robot's reset randomisation.
+        #
+        # MultiMotionCommand._resample_command perturbs the robot only, and in place:
+        #     root_pos += rand_samples[:, 0:3]                    # pure translation
+        #     root_ori  = quat_mul(orientations_delta, root_ori)   # spin about its own root
+        # That is not a rigid transform of the scene, so there is no "same transform" to
+        # apply to the box. Copying the delta onto the box would instead *cancel* the
+        # randomisation, making the robot-relative-to-box pose identical on every reset --
+        # the opposite of what the randomisation is for.
+        #
+        # With the shipped cfg the robot therefore starts offset from the box by up to
+        # 0.05 m in x/y, 0.01 m in z and 0.2 rad of yaw (~13 cm of lateral error at the
+        # ~0.67 m pelvis-to-box distance these clips hold), on top of the +-0.52 rad joint
+        # randomisation. That is real task difficulty, and it is the same randomisation the
+        # body-only teacher trained under.
+        #
+        # reset_base_xy_to_origin is a different matter: it *replaces* the robot's XY with
+        # the env origin, discarding the motion's own XY, so the robot would not be anywhere
+        # near the box. Fail loudly instead of training on a broken relationship.
         if self.cfg.reset_base_xy_to_origin:
             raise NotImplementedError(
                 "ObjectMultiMotionCommand does not support reset_base_xy_to_origin=True: the "
