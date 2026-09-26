@@ -12,8 +12,19 @@ from dataclasses import dataclass
 from isaaclab.assets import ArticulationCfg
 
 from .g1 import G1_CYLINDER_CFG
-from .h1_2 import H1_2_CYLINDER_CFG
-from .adam import ADAM_CYLINDER_CFG
+
+# h1_2.py / adam.py are referenced here but were never committed to the repository,
+# so a clean clone cannot import this module at all (every script that touches
+# robot_registry crashes with ModuleNotFoundError). Make them optional: a missing
+# module just means that platform is not registered.
+try:
+    from .h1_2 import H1_2_CYLINDER_CFG
+except ImportError:
+    H1_2_CYLINDER_CFG = None
+try:
+    from .adam import ADAM_CYLINDER_CFG
+except ImportError:
+    ADAM_CYLINDER_CFG = None
 
 
 @dataclass(frozen=True)
@@ -138,3 +149,5 @@ def get_robot_platform(name: str) -> RobotPlatformSpec:
     return ROBOT_PLATFORMS[name]
 
 
+# Drop platforms whose ArticulationCfg could not be imported.
+ROBOT_PLATFORMS = {k: v for k, v in ROBOT_PLATFORMS.items() if v.cfg is not None}
