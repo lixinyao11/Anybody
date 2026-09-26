@@ -1423,3 +1423,83 @@ class G1PartialMaskedVAEDistillationTrackingEnvCfg(G1VAEDistillationTrackingEnvC
             ),
 
 '''
+
+
+@configclass
+class G1ObjectTrackingEnvCfg(G1OneStageTrackingEnvCfg):
+    """GMT teacher plus a dynamic box, tracked against OmniRetarget's object reference.
+
+    Same body-tracking task as :class:`G1OneStageTrackingEnvCfg`, but the manipulated object
+    is actually in the simulation and the robot is rewarded for moving it along its recorded
+    path, so the push has to happen instead of being mimed in mid-air.
+
+    Requires motion npz carrying ``object_pos_w`` / ``object_quat_w``; see
+    ``scripts/augment_npz_with_object.py``. Motions without them still load (the loader fills
+    an identity pose) and are masked out of the object reward by ``motion_has_object``.
+
+    To warm-start from a body-only GMT checkpoint, widen it first with
+    ``scripts/expand_checkpoint_obs.py --new_policy_dims 14 --new_critic_dims 14`` -- the 14
+    appended observations below are exactly the two 7-D object poses, and zeroing their input
+    columns leaves the policy bit-identical to the body-only teacher at step 0.
+    """
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        # -- true flat ground --------------------------------------------------------------
+        # The inherited terrain is a *generator* whose sub_terrains are 50% flat and 50%
+        # HfRandomUniform with 1-3 cm noise, despite "Flat" in the task name (the real
+        # terrain_type="plane" config is commented out upstream). The object reference holds
+        # the box at a constant z, so terrain noise would sink or tilt the simulated box away
+        # from its reference by an amount no policy can correct -- a permanent reward floor.
+        self.scene.terrain.terrain_type = "plane"
+        self.scene.terrain.terrain_generator = None
+
+        # -- the pushable box --------------------------------------------------------------
+        setattr(self.scene, mdp.OBJECT_ASSET_NAME, mdp.make_object_cfg())
+
+        # -- object-aware command ----------------------------------------------------------
+        # Retarget the existing cfg rather than constructing a fresh
+        # ObjectMultiMotionCommandCfg: the parent __post_init__ chain has already filled in
+        # anchor_body_name, body_names, motion groups, sampling flags and more, and re-deriving
+        # all of that here would silently drift out of sync with the base task.
+        self.commands.motion.class_type = mdp.ObjectMultiMotionCommand
+        self.commands.motion.object_asset_name = mdp.OBJECT_ASSET_NAME
+
+        # -- observations: +7 (simulated box pose) +7 (reference box pose) = 14 per group ---
+        # Appended at the end of both groups so expand_checkpoint_obs.py's zero-padded columns
+        # line up with them. Anchor-relative, like the existing motion_anchor_* terms.
+        for _group in (self.observations.policy, self.observations.critic):
+            _group.object_pose = ObsTerm(
+                func=mdp.object_pose_anchor_b, params={"command_name": "motion"}
+            )
+            _group.object_ref_pose = ObsTerm(
+                func=mdp.object_ref_pose_anchor_b, params={"command_name": "motion"}
+            )
+
+        # -- rewards -----------------------------------------------------------------------
+        # Conservative on purpose for the first run: object position gets the same weight and
+        # std as the robot's own motion_global_anchor_pos (0.5 / 0.3) so the two are directly
+        # comparable, and orientation half that. Against the ~11.0 of positive body-tracking
+        # weight this is ~7%: enough to be learnable, small enough that it should not wreck the
+        # 9 cm body tracking the warm-start checkpoint already achieves. Raise it if the object
+        # error shows no downward trend.
+        self.rewards.object_pos = RewTerm(
+            func=mdp.object_position_tracking,
+            weight=0.5,
+            params={"command_name": "motion", "std": 0.3},
+        )
+        self.rewards.object_ori = RewTerm(
+            func=mdp.object_orientation_tracking,
+            weight=0.25,
+            params={"command_name": "motion", "std": 0.4},
+        )
+
+        # -- termination -------------------------------------------------------------------
+        # Without this the episode keeps collecting body-tracking reward long after the box has
+        # been knocked away, which actively teaches the robot to ignore it. 1.0 m is loose --
+        # it ends hopeless episodes, it is not a tracking target.
+        self.terminations.object_lost = DoneTerm(
+            func=mdp.object_lost,
+            params={"command_name": "motion", "threshold": 1.0},
+        )

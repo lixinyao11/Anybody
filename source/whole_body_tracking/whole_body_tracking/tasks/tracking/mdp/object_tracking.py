@@ -53,7 +53,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObjectCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
-from isaaclab.utils.math import quat_conjugate, quat_mul, quat_rotate_inverse
+from isaaclab.utils.math import quat_conjugate, quat_error_magnitude, quat_mul, quat_rotate_inverse
 
 from .commands import MultiMotionCommand, MultiMotionCommandCfg
 
@@ -247,10 +247,10 @@ def object_orientation_tracking(
     """exp(-angle^2 / std^2) between simulated and reference object orientation."""
     cmd = env.command_manager.get_term(command_name)
     obj = env.scene[cmd.cfg.object_asset_name]
-    q_err = quat_mul(obj.data.root_quat_w, quat_conjugate(cmd.object_ref_quat_w))
-    # |w| = cos(angle/2); clamp guards acos against fp drift outside [-1, 1].
-    angle = 2.0 * torch.acos(torch.clamp(torch.abs(q_err[:, 0]), max=1.0))
-    return torch.exp(-torch.square(angle) / std**2) * cmd.object_has_ref.float()
+    # Same form as motion_global_anchor_orientation_error_exp: reuse the repo's angle metric
+    # rather than hand-rolling acos, so object and body orientation rewards share a scale.
+    error = quat_error_magnitude(cmd.object_ref_quat_w, obj.data.root_quat_w) ** 2
+    return torch.exp(-error / std**2) * cmd.object_has_ref.float()
 
 
 def object_position_error(env: "ManagerBasedRLEnv", command_name: str) -> torch.Tensor:
