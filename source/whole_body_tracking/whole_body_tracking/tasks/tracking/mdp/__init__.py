@@ -11,3 +11,4 @@ from .observations import *  # noqa: F401, F403
 from .rewards import *  # noqa: F401, F403
 from .terminations import *  # noqa: F401, F403
 from .obstacle_reach_command import *  # noqa: F401, F403
+from .object_tracking import *  # noqa: F401, F403

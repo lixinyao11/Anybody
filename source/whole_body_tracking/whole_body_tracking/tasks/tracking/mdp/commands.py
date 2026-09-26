@@ -1086,6 +1086,12 @@ class MultiMotionLoader:
         root_ang_vel_list: list[torch.Tensor] = []
         lengths: list[int] = []
         fps_list: list[float] = []
+        # Optional object reference channel (see scripts/augment_npz_with_object.py). Motions
+        # without it get an identity pose so the [T_total, ...] layout stays uniform and the
+        # generic `gather` path keeps working; `motion_has_object` lets terms mask them out.
+        object_pos_list: list[torch.Tensor] = []
+        object_quat_list: list[torch.Tensor] = []
+        has_object_list: list[bool] = []
 
         for motion_path in self.motion_paths:
             with np.load(motion_path) as data:
@@ -1133,6 +1139,24 @@ class MultiMotionLoader:
                     )
                 )
 
+                n_frames = int(joint_pos_tensor.shape[0])
+                if "object_pos_w" in data.files and "object_quat_w" in data.files:
+                    obj_pos = np.asarray(data["object_pos_w"], dtype=np.float32)
+                    obj_quat = np.asarray(data["object_quat_w"], dtype=np.float32)
+                    assert obj_pos.shape[0] == n_frames and obj_quat.shape[0] == n_frames, (
+                        f"{motion_path}: object trajectory has {obj_pos.shape[0]} frames but the "
+                        f"robot motion has {n_frames}"
+                    )
+                    has_object_list.append(True)
+                else:
+                    obj_pos = np.zeros((n_frames, 3), dtype=np.float32)
+                    obj_quat = np.tile(
+                        np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (n_frames, 1)
+                    )
+                    has_object_list.append(False)
+                object_pos_list.append(torch.from_numpy(obj_pos).to(self.storage_device))
+                object_quat_list.append(torch.from_numpy(obj_quat).to(self.storage_device))
+
                 joint_pos_list.append(joint_pos_tensor)
                 joint_vel_list.append(joint_vel_tensor)
                 body_pos_list.append(body_pos_tensor)
@@ -1151,6 +1175,11 @@ class MultiMotionLoader:
         self.root_quat_w = torch.cat(root_quat_list, dim=0)
         self.root_lin_vel_w = torch.cat(root_lin_vel_list, dim=0)
         self.root_ang_vel_w = torch.cat(root_ang_vel_list, dim=0)
+        self.object_pos_w = torch.cat(object_pos_list, dim=0)
+        self.object_quat_w = torch.cat(object_quat_list, dim=0)
+        self.motion_has_object = torch.tensor(
+            has_object_list, dtype=torch.bool, device=self.storage_device
+        )
 
         # Pin memory only when tensors are on CPU (GPU tensors cannot be pinned).
         if self.storage_device.type == "cpu":
