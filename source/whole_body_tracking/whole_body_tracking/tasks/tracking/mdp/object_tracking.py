@@ -115,6 +115,16 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         # whether the object weight is too low or the task is simply not being attempted.
         self.metrics["error_object_pos"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
+        # Displacement since reset, for the box and for its reference. A large position error
+        # alone cannot say WHY the box is off, and the two causes need opposite fixes:
+        #   travel_object ~ 0 while travel_ref > 0  -> the robot never really touches it,
+        #                                              so the object reward is too weak;
+        #   travel_object >> travel_ref             -> a 0.1 kg box is being batted away by
+        #                                              hand contact, so the mass is wrong.
+        self.metrics["travel_object"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["travel_object_ref"] = torch.zeros(self.num_envs, device=self.device)
+        self._object_start_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self._object_ref_start_pos = torch.zeros(self.num_envs, 3, device=self.device)
 
     def _update_metrics(self):
         super()._update_metrics()
@@ -124,6 +134,10 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         # Zero (not NaN) for motions with no object, so the logged mean stays finite.
         self.metrics["error_object_pos"].copy_(torch.where(has, pos_err, torch.zeros_like(pos_err)))
         self.metrics["error_object_rot"].copy_(torch.where(has, rot_err, torch.zeros_like(rot_err)))
+        t_obj = torch.norm(self._object.data.root_pos_w - self._object_start_pos, dim=-1)
+        t_ref = torch.norm(self.object_ref_pos_w - self._object_ref_start_pos, dim=-1)
+        self.metrics["travel_object"].copy_(torch.where(has, t_obj, torch.zeros_like(t_obj)))
+        self.metrics["travel_object_ref"].copy_(torch.where(has, t_ref, torch.zeros_like(t_ref)))
 
     # -- reference accessors (world frame, env-origin offset applied) -------------------
     @property
@@ -188,6 +202,9 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         self._object.write_root_state_to_sim(
             torch.cat([obj_pos, obj_quat, zeros], dim=-1), env_ids=env_ids_t
         )
+        # Anchor the travel metrics to this reset.
+        self._object_start_pos[env_ids_t] = obj_pos
+        self._object_ref_start_pos[env_ids_t] = obj_pos
 
 
 @configclass
