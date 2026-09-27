@@ -104,6 +104,33 @@ def slerp(q0: np.ndarray, q1: np.ndarray, t: np.ndarray) -> np.ndarray:
     return (out / np.where(n == 0.0, 1.0, n)).astype(np.float32)
 
 
+def upright_yaw_only(quat_wxyz: np.ndarray) -> np.ndarray:
+    """Replace the recorded orientation with 'upright, same yaw'.
+
+    OmniRetarget's largebox asset has its own local z axis pointing DOWN: across whole clips
+    the world-frame components of its local z average about (-0.16, 0.02, -0.99). Handing that
+    quaternion straight to an Isaac ``CuboidCfg`` -- whose local z is up by construction --
+    spawns the box nearly upside down, so it is balanced on an edge and topples the instant
+    physics starts. That toppling, not the robot, was producing ~0.45 m of box displacement
+    on every episode regardless of mass, friction, collision size or reward weight.
+
+    For a box sliding flat the only meaningful degree of freedom is yaw, and it is well
+    behaved: taking the asset's local x axis, projecting it onto the world XY plane and
+    reading atan2 gives a yaw that moves at most 1.4-1.9 deg per frame. So we keep that yaw
+    and drop the rest, which also removes the ~9 deg of residual wobble in the recording.
+    """
+    w, x, y, z = quat_wxyz[:, 0], quat_wxyz[:, 1], quat_wxyz[:, 2], quat_wxyz[:, 3]
+    # First column of the rotation matrix = the asset's local x axis in world coordinates.
+    ax_x = 1.0 - 2.0 * (y * y + z * z)
+    ax_y = 2.0 * (x * y + w * z)
+    yaw = np.arctan2(ax_y, ax_x)
+    half = 0.5 * yaw
+    out = np.zeros_like(quat_wxyz)
+    out[:, 0] = np.cos(half)
+    out[:, 3] = np.sin(half)
+    return out.astype(np.float32)
+
+
 def resample(quat_in: np.ndarray, pos_in: np.ndarray, input_fps: int,
              output_fps: int, n_out: int) -> tuple[np.ndarray, np.ndarray]:
     """Resample an object trajectory onto MotionLoader's output time base."""
@@ -171,6 +198,7 @@ def augment(conv_path: Path, raw_root: Path, dry_run: bool = False) -> dict:
                 "reason": f"object quat norm {norms.min():.4f}..{norms.max():.4f}"}
 
     quat, pos = resample(quat_in, pos_in, in_fps, out_fps, n_out)
+    quat = upright_yaw_only(quat)
 
     if not dry_run:
         data["object_pos_w"] = pos
