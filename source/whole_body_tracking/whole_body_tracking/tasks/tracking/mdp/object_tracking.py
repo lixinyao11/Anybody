@@ -43,6 +43,7 @@ registers the observation/reward terms, and the gym task id.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -64,8 +65,14 @@ OBJECT_ASSET_NAME = "tracked_object"
 
 # Axis-aligned extents of OmniRetarget's largebox.obj, measured from the mesh.
 LARGEBOX_SIZE: tuple[float, float, float] = (0.4712, 0.4587, 0.4079)
-# From largebox.urdf. Deliberately surfaced: 0.1 kg is very light for this volume.
-DEFAULT_MASS: float = 0.1
+# largebox.urdf declares 0.1 kg, which is implausible for a 47 cm box and measurably wrong
+# here: at 0.1 kg the box travelled 0.48 m against a 0.30 m reference (1.6x too far) and picked
+# up 0.96 rad of spurious rotation -- hand contact launches it instead of sliding it. The
+# reference itself slides smoothly at constant z over ~1.5 m, i.e. a quasi-static push against
+# friction, which implies real mass. 3 kg is plausible for a box this size and needs only
+# ~26 N to push at mu=0.9, well within a ~35 kg G1's means.
+# Override with OBJECT_MASS_KG to sweep without editing code.
+DEFAULT_MASS: float = float(os.environ.get("OBJECT_MASS_KG", "3.0"))
 _OBJECT_COLOR = (0.70, 0.80, 0.90)
 
 
