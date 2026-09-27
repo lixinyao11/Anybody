@@ -1489,20 +1489,27 @@ class G1ObjectTrackingEnvCfg(G1OneStageTrackingEnvCfg):
             )
 
         # -- rewards -----------------------------------------------------------------------
-        # Conservative on purpose for the first run: object position gets the same weight and
-        # std as the robot's own motion_global_anchor_pos (0.5 / 0.3) so the two are directly
-        # comparable, and orientation half that. Against the ~11.0 of positive body-tracking
-        # weight this is ~7%: enough to be learnable, small enough that it should not wreck the
-        # 9 cm body tracking the warm-start checkpoint already achieves. Raise it if the object
-        # error shows no downward trend.
+        # Measured, not guessed. A first run at weight 0.5 / 0.25 left the object error flat at
+        # ~0.46 m for hundreds of iterations while body tracking sat at 0.062 m. Reading the
+        # realised Episode_Reward values explains why: the object terms earned 0.042 + 0.017 out
+        # of a ~2.49 total, i.e. 2.4% of the reward the policy was actually collecting. Pushing
+        # the box from 0.46 m to 0.15 m would have gained ~0.3 while risking more than that in
+        # body-tracking reward, so ignoring the box was the rational choice.
+        #
+        # 3.0 matches the largest body term (motion_anchor_lin_vel), making the object worth
+        # about as much as the single most valuable tracking objective; orientation gets 1.0.
+        # Object potential is then 4.0 against ~19.0 of body weight (~17%).
+        #
+        # Watch error_body_pos: if it climbs past ~0.15 m the trade has gone too far.
+        # Override with OBJECT_POS_WEIGHT / OBJECT_ORI_WEIGHT to sweep without a code change.
         self.rewards.object_pos = RewTerm(
             func=mdp.object_position_tracking,
-            weight=0.5,
+            weight=float(os.environ.get("OBJECT_POS_WEIGHT", "3.0")),
             params={"command_name": "motion", "std": 0.3},
         )
         self.rewards.object_ori = RewTerm(
             func=mdp.object_orientation_tracking,
-            weight=0.25,
+            weight=float(os.environ.get("OBJECT_ORI_WEIGHT", "1.0")),
             params={"command_name": "motion", "std": 0.4},
         )
 
