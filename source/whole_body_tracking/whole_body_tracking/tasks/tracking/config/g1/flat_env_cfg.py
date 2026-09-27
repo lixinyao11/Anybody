@@ -1517,7 +1517,10 @@ class G1ObjectTrackingEnvCfg(G1OneStageTrackingEnvCfg):
         # Without this the episode keeps collecting body-tracking reward long after the box has
         # been knocked away, which actively teaches the robot to ignore it. 1.0 m is loose --
         # it ends hopeless episodes, it is not a tracking target.
+        # 1.0 m was ending ~30% of episodes (object_lost 5.75 vs motion_end 13.1) while the
+        # error itself sits near 0.5 m, so the cut-off was truncating exactly the episodes the
+        # policy needs in order to learn recovery. 1.5 m still ends hopeless ones.
         self.terminations.object_lost = DoneTerm(
             func=mdp.object_lost,
-            params={"command_name": "motion", "threshold": 1.0},
+            params={"command_name": "motion", "threshold": float(os.environ.get("OBJECT_LOST_M", "1.5"))},
         )

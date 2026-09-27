@@ -104,7 +104,13 @@ _OBJECT_COLOR = (0.70, 0.80, 0.90)
 # rather than sliding.
 # Sliding at h = 0.44 m needs mu < w/h = 0.49. The reference itself slides the box smoothly
 # over ~1.5 m at constant z, which is only consistent with low friction.
-DEFAULT_FRICTION: float = float(os.environ.get("OBJECT_FRICTION", "0.3"))
+# Measured from the reference rather than taken from the URDF. Differentiating the recorded
+# box position gives decelerations with a median of 0.29-0.63 m/s^2, i.e. an implied
+# mu = a/g of about 0.06 (25-75 pct 0.022-0.105). Independently, at mu = 0.3 the simulated
+# box consistently UNDER-travels: 0.82-0.86 of the reference distance, every iteration --
+# too much resistance. (The reference is a kinematic optimisation, not a physics rollout, so
+# the implied mu is indicative; the under-travel is the direct evidence.)
+DEFAULT_FRICTION: float = float(os.environ.get("OBJECT_FRICTION", "0.1"))
 
 
 def make_object_cfg(
