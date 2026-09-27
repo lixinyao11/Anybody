@@ -109,6 +109,21 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
     def __init__(self, cfg: "ObjectMultiMotionCommandCfg", env: "ManagerBasedRLEnv"):
         super().__init__(cfg, env)
         self._object = env.scene[cfg.object_asset_name]
+        # Log-only, in metres and radians. The reward terms are exp(-err^2/std^2), which
+        # saturates near zero once the error exceeds ~std and therefore cannot tell "the box is
+        # 0.4 m off" from "the box is 4 m off" -- exactly the distinction needed to decide
+        # whether the object weight is too low or the task is simply not being attempted.
+        self.metrics["error_object_pos"] = torch.zeros(self.num_envs, device=self.device)
+        self.metrics["error_object_rot"] = torch.zeros(self.num_envs, device=self.device)
+
+    def _update_metrics(self):
+        super()._update_metrics()
+        has = self.object_has_ref
+        pos_err = torch.norm(self._object.data.root_pos_w - self.object_ref_pos_w, dim=-1)
+        rot_err = quat_error_magnitude(self.object_ref_quat_w, self._object.data.root_quat_w)
+        # Zero (not NaN) for motions with no object, so the logged mean stays finite.
+        self.metrics["error_object_pos"].copy_(torch.where(has, pos_err, torch.zeros_like(pos_err)))
+        self.metrics["error_object_rot"].copy_(torch.where(has, rot_err, torch.zeros_like(rot_err)))
 
     # -- reference accessors (world frame, env-origin offset applied) -------------------
     @property
