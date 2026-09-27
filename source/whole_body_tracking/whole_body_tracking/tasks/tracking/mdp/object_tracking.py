@@ -95,11 +95,23 @@ DEFAULT_MASS: float = float(os.environ.get("OBJECT_MASS_KG", "3.0"))
 _OBJECT_COLOR = (0.70, 0.80, 0.90)
 
 
+# largebox.urdf declares friction 0.9, which makes this box tip instead of slide.
+# Statics: a box of half-width w pushed horizontally at height h tips rather than slides once
+# h > w / mu. Here w = 0.2146 m and the pushing hand (body 29) sits at 0.24-0.74 m, mean
+# 0.44 m, so at mu = 0.9 the tipping threshold is 0.2146/0.9 = 0.24 m -- far below the actual
+# push height, i.e. tipping is unavoidable. Observed at mu = 0.9: 0.47 m displacement with
+# 0.90-0.99 rad (52-57 deg) of rotation, which is the signature of a box going over an edge
+# rather than sliding.
+# Sliding at h = 0.44 m needs mu < w/h = 0.49. The reference itself slides the box smoothly
+# over ~1.5 m at constant z, which is only consistent with low friction.
+DEFAULT_FRICTION: float = float(os.environ.get("OBJECT_FRICTION", "0.3"))
+
+
 def make_object_cfg(
     size: tuple[float, float, float] = LARGEBOX_SIZE,
     mass: float = DEFAULT_MASS,
-    static_friction: float = 0.9,
-    dynamic_friction: float = 0.9,
+    static_friction: float = DEFAULT_FRICTION,
+    dynamic_friction: float = DEFAULT_FRICTION,
 ) -> RigidObjectCfg:
     """A pushable box matching OmniRetarget's largebox.
 
@@ -147,6 +159,10 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         #                                              so the object reward is too weak;
         #   travel_object >> travel_ref             -> a 0.1 kg box is being batted away by
         #                                              hand contact, so the mass is wrong.
+        # Angle between the box's own z axis and world up. Distinguishes "slid off course"
+        # (tilt ~ 0) from "tipped over" (tilt approaching pi/2), which the total quaternion
+        # error cannot: a 52 deg error could be either a yaw drift or a box on its edge.
+        self.metrics["object_tilt"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["travel_object"] = torch.zeros(self.num_envs, device=self.device)
         self.metrics["travel_object_ref"] = torch.zeros(self.num_envs, device=self.device)
         self._object_start_pos = torch.zeros(self.num_envs, 3, device=self.device)
@@ -160,6 +176,13 @@ class ObjectMultiMotionCommand(MultiMotionCommand):
         # Zero (not NaN) for motions with no object, so the logged mean stays finite.
         self.metrics["error_object_pos"].copy_(torch.where(has, pos_err, torch.zeros_like(pos_err)))
         self.metrics["error_object_rot"].copy_(torch.where(has, rot_err, torch.zeros_like(rot_err)))
+        # Box local z expressed in world coords is the third column of its rotation matrix;
+        # for quaternion (w,x,y,z) that is (2(xz+wy), 2(yz-wx), 1-2(x^2+y^2)).
+        q = self._object.data.root_quat_w
+        w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+        up_z = 1.0 - 2.0 * (x * x + y * y)
+        tilt = torch.acos(torch.clamp(up_z, -1.0, 1.0))
+        self.metrics["object_tilt"].copy_(torch.where(has, tilt, torch.zeros_like(tilt)))
         t_obj = torch.norm(self._object.data.root_pos_w - self._object_start_pos, dim=-1)
         t_ref = torch.norm(self.object_ref_pos_w - self._object_ref_start_pos, dim=-1)
         self.metrics["travel_object"].copy_(torch.where(has, t_obj, torch.zeros_like(t_obj)))
