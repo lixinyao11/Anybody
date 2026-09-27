@@ -64,7 +64,26 @@ if TYPE_CHECKING:
 OBJECT_ASSET_NAME = "tracked_object"
 
 # Axis-aligned extents of OmniRetarget's largebox.obj, measured from the mesh.
-LARGEBOX_SIZE: tuple[float, float, float] = (0.4712, 0.4587, 0.4079)
+LARGEBOX_VISUAL_SIZE: tuple[float, float, float] = (0.4712, 0.4587, 0.4079)
+
+# The simulated box must be smaller than the visual mesh, and the data says by how much.
+#
+# OmniRetarget's reference holds the box centre at a constant z = 0.183 m. Resting on flat
+# ground that implies a collision half-height of 0.183, i.e. 0.021 m less than the visual
+# mesh's 0.204 -- their collision proxy is ~2.1 cm smaller per side than the render mesh.
+# Independently, measuring the reference motion against the full-size box gives robot bodies
+# penetrating it on 257 of 664 frames with a MEDIAN depth of 1.9 cm (90th pct 5.6 cm): the
+# retargeted motion is only kinematically consistent with a box about that much smaller.
+#
+# Using the visual size for collision therefore breaks three things at once: the box starts
+# 2.1 cm underground and is popped up at every reset, and the reference hand pose is
+# permanently inside the box, so physics resolves it by shoving the box off its path. That is
+# what produced a stable 0.47 m tracking error which neither more mass nor a 6x larger reward
+# weight could touch.
+COLLISION_SHRINK_PER_SIDE: float = 0.021
+LARGEBOX_SIZE: tuple[float, float, float] = tuple(
+    v - 2.0 * COLLISION_SHRINK_PER_SIDE for v in LARGEBOX_VISUAL_SIZE
+)  # (0.4292, 0.4167, 0.3659) -> half-height 0.1830, matching the reference z exactly
 # largebox.urdf declares 0.1 kg, which is implausible for a 47 cm box and measurably wrong
 # here: at 0.1 kg the box travelled 0.48 m against a 0.30 m reference (1.6x too far) and picked
 # up 0.96 rad of spurious rotation -- hand contact launches it instead of sliding it. The
